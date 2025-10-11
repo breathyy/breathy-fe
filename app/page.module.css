@@ -1,0 +1,30 @@
+.mascot {
+  transition: transform 300ms cubic-bezier(.2,.9,.2,1), filter 200ms ease;
+  will-change: transform;
+}
+
+.mascot:hover {
+  transform: translateY(-12px) rotate(-4deg) scale(1.03);
+  filter: drop-shadow(0 18px 30px rgba(0,0,0,0.12));
+}
+
+.mascot-small:hover {
+  transform: translateY(-8px) rotate(2deg) scale(1.02);
+}
+
+.mascot-right:hover {
+  transform: translateY(-10px) rotate(6deg) scale(1.03);
+}
+
+.phone {
+  transform-origin: center;
+  animation: floatPhone 6s ease-in-out infinite;
+}
+
+@keyframes floatPhone {
+  0% { transform: translateY(0) rotate(0deg); }
+  20% { transform: translateY(-12px) rotate(-1.2deg); }
+  50% { transform: translateY(0) rotate(0.3deg); }
+  80% { transform: translateY(-8px) rotate(1deg); }
+  100% { transform: translateY(0) rotate(0deg); }
+}
