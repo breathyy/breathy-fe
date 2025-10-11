@@ -1,0 +1,22 @@
+.navLink {
+  display: inline-block;
+  transition: transform 180ms cubic-bezier(.2,.8,.2,1), color 180ms ease;
+  will-change: transform;
+}
+
+.navLink:hover,
+.navLink:focus {
+  transform: translateY(-6px) scale(1.02);
+  color: #dc2776; /* slightly darker pink */
+}
+
+.login {
+  display: inline-block;
+  transition: transform 180ms cubic-bezier(.2,.8,.2,1), color 180ms ease;
+}
+
+.login:hover,
+.login:focus {
+  transform: translateY(-4px);
+  color: #111827;
+}
