@@ -17,13 +17,13 @@ export default function Navbar() {
 
 				<ul className="hidden md:flex items-center gap-16 text-sm text-gray-700">
 					<li>
-						<Link href="#" className={styles.navLink}>Dashboard</Link>
+						<Link href="/dashboard" className={styles.navLink}>Dashboard</Link>
 					</li>
 					<li>
-						<Link href="#" className={styles.navLink}>Tentang</Link>
+						<Link href="/tentang" className={styles.navLink}>Tentang</Link>
 					</li>
 					<li>
-						<Link href="#" className={styles.navLink}>Chatbot</Link>
+						<Link href="/chatbot" className={styles.navLink}>Chatbot</Link>
 					</li>
 				</ul>
 
