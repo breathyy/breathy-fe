@@ -293,7 +293,7 @@ export default function ChatbotPage() {
         }
       }
     },
-    [caseId, token, blobBaseUrl, setWaitingForBot]
+  [caseId, token, blobBaseUrl, logoutPatient, setWaitingForBot]
   );
 
   useEffect(() => {
@@ -327,6 +327,55 @@ export default function ChatbotPage() {
   }, [caseId, messages, patientSession?.storedAt, status]);
 
   const chatSessions = chatSession ? [chatSession] : [];
+
+  const resetFileInput = useCallback(() => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, []);
+
+  const handleResetChat = useCallback(async () => {
+    if (!caseId || !token) {
+      setChatError("Sesi pasien tidak valid untuk reset.");
+      return;
+    }
+
+    const confirmed = window.confirm("Mulai percakapan baru? Riwayat chat sebelumnya akan dibersihkan.");
+    if (!confirmed) {
+      return;
+    }
+
+    setIsResetting(true);
+    setChatError(null);
+
+    try {
+      const result = await apiFetch<ResetChatResponse>(`/cases/${caseId}/chat/reset`, {
+        method: "POST",
+        token,
+      });
+
+      resetFileInput();
+      setInputText("");
+      setMessages([]);
+      setWaitingForBot(false);
+      await fetchMessages({ silent: true });
+      setPatientCaseStatus(result.caseStatus ?? "IN_CHATBOT");
+      setChatNotice("Percakapan berhasil direset. Kamu bisa mulai cerita lagi kapan saja.");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        setChatError("Sesi kamu sudah berakhir. Silakan masuk kembali.");
+        logoutPatient();
+        router.replace("/login");
+      } else {
+        const message = error instanceof ApiError
+          ? error.body?.message || error.message
+          : "Gagal mereset percakapan. Coba lagi sebentar lagi.";
+        setChatError(message);
+      }
+    } finally {
+      setIsResetting(false);
+    }
+  }, [caseId, token, fetchMessages, logoutPatient, resetFileInput, router, setPatientCaseStatus, setWaitingForBot]);
 
   if (!loading && !hasAccess) {
     return (
@@ -376,55 +425,6 @@ export default function ChatbotPage() {
       fetchMessages();
     }
   };
-
-  const resetFileInput = useCallback(() => {
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-  }, []);
-
-  const handleResetChat = useCallback(async () => {
-    if (!caseId || !token) {
-      setChatError("Sesi pasien tidak valid untuk reset.");
-      return;
-    }
-
-    const confirmed = window.confirm("Mulai percakapan baru? Riwayat chat sebelumnya akan dibersihkan.");
-    if (!confirmed) {
-      return;
-    }
-
-    setIsResetting(true);
-    setChatError(null);
-
-    try {
-      const result = await apiFetch<ResetChatResponse>(`/cases/${caseId}/chat/reset`, {
-        method: "POST",
-        token,
-      });
-
-      resetFileInput();
-      setInputText("");
-      setMessages([]);
-  setWaitingForBot(false);
-      await fetchMessages({ silent: true });
-      setPatientCaseStatus(result.caseStatus ?? "IN_CHATBOT");
-      setChatNotice("Percakapan berhasil direset. Kamu bisa mulai cerita lagi kapan saja.");
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        setChatError("Sesi kamu sudah berakhir. Silakan masuk kembali.");
-        logoutPatient();
-        router.replace("/login");
-      } else {
-        const message = error instanceof ApiError
-          ? error.body?.message || error.message
-          : "Gagal mereset percakapan. Coba lagi sebentar lagi.";
-        setChatError(message);
-      }
-    } finally {
-      setIsResetting(false);
-    }
-  }, [caseId, token, fetchMessages, logoutPatient, resetFileInput, router, setPatientCaseStatus, setWaitingForBot]);
 
   const handleAttachmentClick = () => {
     if (!caseId || !token) {
