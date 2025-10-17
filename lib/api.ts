@@ -72,6 +72,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   }
 
   const text = await response.text();
+  const contentType = response.headers.get("content-type") ?? "";
   if (!text) {
     if (!response.ok) {
       throw new ApiError(response.statusText, response.status, null);
@@ -83,6 +84,15 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   try {
     payload = JSON.parse(text) as ApiSuccessEnvelope<T> | ApiErrorEnvelope | Record<string, unknown>;
   } catch (error) {
+    const trimmed = text.trim();
+    const looksHtml = trimmed.startsWith("<") || contentType.includes("text/html");
+    if (looksHtml) {
+      throw new ApiError(
+        `API response is HTML. Periksa konfigurasi NEXT_PUBLIC_API_BASE_URL (saat ini '${base}').`,
+        response.status,
+        null
+      );
+    }
     throw new ApiError(`Unexpected response format (${(error as Error).message})`, response.status, null);
   }
 

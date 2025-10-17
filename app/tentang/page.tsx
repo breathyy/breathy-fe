@@ -9,6 +9,7 @@ import { Navbar, DateChip, Button, AuthGuardModal } from "../../assets/assets";
 import Tentang from "../../assets/images/tentang.png";
 import Mascot from "../../assets/images/breathy/breathy2.png";
 import { useAuth } from "@/contexts/AuthContext";
+import { apiFetch } from "@/lib/api";
 import type { CaseStatus } from "@/lib/types";
 
 type CompanionResourceType = "hospital" | "pharmacy" | "note" | "task";
@@ -209,16 +210,56 @@ const isEscalatedStatus = (status: CaseStatus | null): boolean => status === "MO
 
 export default function TentangPage() {
   const router = useRouter();
-  const { patientSession, doctorSession, loading } = useAuth();
+  const { patientSession, doctorSession, loading, setPatientCaseStatus } = useAuth();
   const [showGuard, setShowGuard] = useState(false);
   const [redirected, setRedirected] = useState(false);
 
   const hasPatientSession = Boolean(patientSession);
   const hasDoctorSession = Boolean(doctorSession);
+  const patientToken = patientSession?.token ?? null;
+  const patientCaseId = patientSession?.caseId ?? null;
+  const patientCaseStatus = patientSession?.caseStatus ?? null;
   const hasAccess = hasPatientSession || hasDoctorSession;
-  const caseStatus: CaseStatus | null = patientSession?.caseStatus ?? null;
+  const caseStatus: CaseStatus | null = patientCaseStatus ?? null;
   const plan = useMemo(() => (caseStatus ? companionPlans[caseStatus] : undefined), [caseStatus]);
   const showCompanionPlan = hasPatientSession && Boolean(plan);
+
+  useEffect(() => {
+    if (!hasPatientSession || !patientToken || !patientCaseId) {
+      return;
+    }
+    if (patientCaseStatus !== "WAITING_DOCTOR") {
+      return;
+    }
+
+    let cancelled = false;
+
+    const synchronizeCaseStatus = async () => {
+      try {
+        const detail = await apiFetch<{ status: CaseStatus }>(`/cases/${patientCaseId}`, {
+          method: "GET",
+          token: patientToken,
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        const nextStatus = detail?.status;
+        if (nextStatus && nextStatus !== patientCaseStatus) {
+          setPatientCaseStatus(nextStatus);
+        }
+      } catch (error) {
+        console.error("Gagal menyegarkan status companion", error);
+      }
+    };
+
+    synchronizeCaseStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasPatientSession, patientToken, patientCaseId, patientCaseStatus, setPatientCaseStatus]);
 
   useEffect(() => {
     if (!loading && !hasAccess) {

@@ -49,9 +49,37 @@ export default function Home() {
           </div>
 
           <p className="mt-6 text-gray-600 text-lg">Asisten Pintar untuk Kesehatan Pernapasan.</p>
-              <Button href="/register" className="mt-8 px-8 py-3 text-lg">
-                Daftar Sekarang
-              </Button>
+          <div className="mt-8 flex items-center justify-center gap-3">
+            <Button
+              href="/register"
+              className="px-10 py-3 text-lg font-semibold shadow-[0_12px_24px_rgba(252,76,150,0.35)] hover:shadow-[0_16px_32px_rgba(252,80,154,0.4)]"
+            >
+              Daftar Sekarang
+            </Button>
+            <a
+              href="https://wa.me/6288980872764"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-full px-6 py-3 text-sm font-semibold text-white transition-transform transition-shadow duration-200 hover:-translate-y-0.5 hover:shadow-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pink-200"
+              style={{
+                backgroundImage: "linear-gradient(120deg, #FC4C96 0%, #FF99C0 50%, #FC509A 100%)",
+                boxShadow: "0 8px 0 rgba(0,0,0,0.06), inset 0 -6px 0 rgba(0,0,0,0.06)",
+              }}
+            >
+              <span className="inline-flex h-5 w-5 items-center justify-center">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  className="h-5 w-5"
+                  aria-hidden="true"
+                >
+                  <path d="M12 2a9.94 9.94 0 00-8.94 14.48L2 22l5.66-1.92A10 10 0 1012 2zm0 18a7.94 7.94 0 01-4.07-1.12l-.29-.17-3.36 1.14 1.12-3.27-.18-.3A7.94 7.94 0 1112 20zm4.38-5.18c-.24-.12-1.43-.7-1.65-.78s-.38-.12-.54.12-.61.78-.75.94-.27.18-.51.06a6.5 6.5 0 01-1.91-1.18 7 7 0 01-1.29-1.62c-.13-.24 0-.37.1-.49s.24-.28.36-.42a1.62 1.62 0 00.24-.4.45.45 0 000-.42c-.06-.12-.54-1.3-.75-1.79s-.4-.42-.54-.43h-.45a.86.86 0 00-.61.28 2.55 2.55 0 00-.8 1.9 4.44 4.44 0 001 2.35 10.17 10.17 0 003.9 3.18 12.59 12.59 0 001.29.48 3.09 3.09 0 001.42.09 2.32 2.32 0 001.52-1.08 1.9 1.9 0 00.13-1.08c-.05-.09-.22-.15-.46-.27z" />
+                </svg>
+              </span>
+              <span>WA Bot</span>
+            </a>
+          </div>
         </div>
 
         {/* decorative background: large semicircle at bottom + two outline rings */}

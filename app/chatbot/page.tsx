@@ -4,9 +4,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 
-import { AuthGuardModal, Button } from "@/assets/assets";
+import { AuthGuardModal, Button, TypingIndicator } from "@/assets/assets";
 import { useAuth } from "@/contexts/AuthContext";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, ApiError } from "@/lib/api";
 import { getBlobPublicBaseUrl } from "@/lib/config";
 import type { CaseStatus } from "@/lib/types";
 import logo from "../../assets/logo/logo.png";
@@ -79,6 +79,14 @@ interface UploadUrlResponse {
   fileSizeBytes?: number | null;
 }
 
+interface ResetChatResponse {
+  caseId: string;
+  caseStatus: CaseStatus;
+  clearedMessages: number;
+  clearedSymptoms: number;
+  clearedTasks: number;
+}
+
 const statusLabel: Record<CaseStatus, string> = {
   IN_CHATBOT: "Dalam Investigasi",
   WAITING_DOCTOR: "Menunggu Dokter",
@@ -110,8 +118,11 @@ const mapApiMessageToUi = (entry: ApiChatMessage, blobBaseUrl: string | null): M
   const direction = extractDirection(entry.meta ?? undefined);
   const rawText = typeof entry.content === "string" ? entry.content : null;
   const text = rawText && rawText.trim().length > 0 ? rawText.trim() : entry.type === "image" ? "Media terkirim" : "";
+  const metaTimestampRaw = entry.meta && typeof entry.meta === "object" ? (entry.meta as { timestamp?: string }).timestamp : undefined;
+  const metaTimestamp = typeof metaTimestampRaw === "string" ? new Date(metaTimestampRaw) : null;
   const created = new Date(entry.createdAt);
-  const timestamp = Number.isNaN(created.getTime()) ? new Date() : created;
+  const preferredTimestamp = metaTimestamp && !Number.isNaN(metaTimestamp.getTime()) ? metaTimestamp : created;
+  const timestamp = Number.isNaN(preferredTimestamp.getTime()) ? new Date() : preferredTimestamp;
 
   let media: MessageMedia | undefined;
   if (entry.type === "image") {
@@ -153,19 +164,29 @@ const mapApiMessageToUi = (entry: ApiChatMessage, blobBaseUrl: string | null): M
 
 export default function ChatbotPage() {
   const router = useRouter();
-  const { patientSession, doctorSession, loading, setPatientCaseStatus } = useAuth();
+  const { patientSession, doctorSession, loading, setPatientCaseStatus, logoutPatient } = useAuth();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [blobBaseUrl] = useState(() => getBlobPublicBaseUrl());
   const [showGuard, setShowGuard] = useState(false);
   const [redirected, setRedirected] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState("");
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [loadingMessages, setLoadingMessages] = useState(true);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [chatNotice, setChatNotice] = useState<string | null>(null);
   const [isSendingText, setIsSendingText] = useState(false);
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [isWaitingForBot, setIsWaitingForBot] = useState(false);
+  const isWaitingForBotRef = useRef(false);
+  const lastBotMessageIdRef = useRef<string | null>(null);
+
+  const setWaitingForBot = useCallback((value: boolean) => {
+    isWaitingForBotRef.current = value;
+    setIsWaitingForBot(value);
+  }, []);
   const hasPatientSession = Boolean(patientSession);
   const hasDoctorSession = Boolean(doctorSession);
   const hasAccess = hasPatientSession || hasDoctorSession;
@@ -200,11 +221,23 @@ export default function ChatbotPage() {
     }
   }, [caseId]);
 
+  useEffect(() => {
+    if (!chatNotice) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      setChatNotice(null);
+    }, 6000);
+    return () => window.clearTimeout(timer);
+  }, [chatNotice]);
+
   const fetchMessages = useCallback(
     async (options?: { silent?: boolean }) => {
       const shouldToggleLoading = !options?.silent;
       if (!caseId || !token) {
         setMessages([]);
+        setWaitingForBot(false);
+        lastBotMessageIdRef.current = null;
         if (shouldToggleLoading) {
           setLoadingMessages(false);
         }
@@ -224,19 +257,43 @@ export default function ChatbotPage() {
 
         const formatted = data
           .map((item) => mapApiMessageToUi(item, blobBaseUrl))
-          .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+          .sort((a, b) => {
+            const delta = a.timestamp.getTime() - b.timestamp.getTime();
+            if (delta !== 0) {
+              return delta;
+            }
+            return a.id.localeCompare(b.id);
+          });
+
+        const latestBotMessage = [...formatted].reverse().find((message) => message.sender === "bot");
+        if (latestBotMessage) {
+          if (lastBotMessageIdRef.current !== latestBotMessage.id) {
+            lastBotMessageIdRef.current = latestBotMessage.id;
+            if (isWaitingForBotRef.current) {
+              setWaitingForBot(false);
+            }
+          }
+        } else {
+          lastBotMessageIdRef.current = null;
+        }
 
         setMessages(formatted);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Gagal memuat riwayat chat";
-        setChatError(message);
+        if (error instanceof ApiError && error.status === 401) {
+          setChatError("Sesi kamu sudah berakhir. Silakan masuk kembali.");
+          logoutPatient();
+          setShowGuard(true);
+        } else {
+          const message = error instanceof Error ? error.message : "Gagal memuat riwayat chat";
+          setChatError(message);
+        }
       } finally {
         if (shouldToggleLoading) {
           setLoadingMessages(false);
         }
       }
     },
-    [caseId, token, blobBaseUrl]
+    [caseId, token, blobBaseUrl, setWaitingForBot]
   );
 
   useEffect(() => {
@@ -320,11 +377,54 @@ export default function ChatbotPage() {
     }
   };
 
-  const resetFileInput = () => {
+  const resetFileInput = useCallback(() => {
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
-  };
+  }, []);
+
+  const handleResetChat = useCallback(async () => {
+    if (!caseId || !token) {
+      setChatError("Sesi pasien tidak valid untuk reset.");
+      return;
+    }
+
+    const confirmed = window.confirm("Mulai percakapan baru? Riwayat chat sebelumnya akan dibersihkan.");
+    if (!confirmed) {
+      return;
+    }
+
+    setIsResetting(true);
+    setChatError(null);
+
+    try {
+      const result = await apiFetch<ResetChatResponse>(`/cases/${caseId}/chat/reset`, {
+        method: "POST",
+        token,
+      });
+
+      resetFileInput();
+      setInputText("");
+      setMessages([]);
+  setWaitingForBot(false);
+      await fetchMessages({ silent: true });
+      setPatientCaseStatus(result.caseStatus ?? "IN_CHATBOT");
+      setChatNotice("Percakapan berhasil direset. Kamu bisa mulai cerita lagi kapan saja.");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        setChatError("Sesi kamu sudah berakhir. Silakan masuk kembali.");
+        logoutPatient();
+        router.replace("/login");
+      } else {
+        const message = error instanceof ApiError
+          ? error.body?.message || error.message
+          : "Gagal mereset percakapan. Coba lagi sebentar lagi.";
+        setChatError(message);
+      }
+    } finally {
+      setIsResetting(false);
+    }
+  }, [caseId, token, fetchMessages, logoutPatient, resetFileInput, router, setPatientCaseStatus, setWaitingForBot]);
 
   const handleAttachmentClick = () => {
     if (!caseId || !token) {
@@ -381,6 +481,7 @@ export default function ChatbotPage() {
     setMessages((prev) => [...prev, optimisticMessage]);
     setInputText("");
     setIsUploadingMedia(true);
+  setWaitingForBot(true);
     setChatError(null);
 
     try {
@@ -433,8 +534,15 @@ export default function ChatbotPage() {
       await fetchMessages({ silent: true });
     } catch (error) {
       setMessages((prev) => prev.filter((message) => message.id !== optimisticId));
-      const message = error instanceof Error ? error.message : "Gagal mengirim media";
-      setChatError(message);
+      setWaitingForBot(false);
+      if (error instanceof ApiError && error.status === 401) {
+        setChatError("Sesi kamu sudah berakhir. Silakan masuk kembali.");
+        logoutPatient();
+        setShowGuard(true);
+      } else {
+        const message = error instanceof Error ? error.message : "Gagal mengirim media";
+        setChatError(message);
+      }
     } finally {
       setIsUploadingMedia(false);
       if (objectUrl) {
@@ -461,6 +569,7 @@ export default function ChatbotPage() {
     setMessages((prev) => [...prev, optimisticMessage]);
     setInputText("");
     setIsSendingText(true);
+  setWaitingForBot(true);
     setChatError(null);
 
     try {
@@ -480,8 +589,15 @@ export default function ChatbotPage() {
       await fetchMessages({ silent: true });
     } catch (error) {
       setMessages((prev) => prev.filter((message) => message.id !== optimisticId));
-      const message = error instanceof Error ? error.message : "Gagal mengirim pesan";
-      setChatError(message);
+      setWaitingForBot(false);
+      if (error instanceof ApiError && error.status === 401) {
+        setChatError("Sesi kamu sudah berakhir. Silakan masuk kembali.");
+        logoutPatient();
+        setShowGuard(true);
+      } else {
+        const message = error instanceof Error ? error.message : "Gagal mengirim pesan";
+        setChatError(message);
+      }
     } finally {
       setIsSendingText(false);
     }
@@ -512,248 +628,331 @@ export default function ChatbotPage() {
       minute: "2-digit",
     });
 
-  return (
-    <div className="min-h-screen bg-[#FFF5F7]">
-      <header className="bg-white shadow px-4 sm:px-6 lg:px-8 py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Image src={logo} alt="Breathy Logo" width={40} height={40} />
-            <div>
-              <h1 className="text-xl font-semibold text-[#1F2937]">Breathy Care Assistant</h1>
-              <p className="text-sm text-[#6B7280]">Kelola percakapan Anda dengan dokter secara real-time</p>
-            </div>
-          </div>
+  type HistoryItem = {
+    id: string;
+    title: string;
+    subtitle: string;
+    highlight?: boolean;
+    description?: string;
+    status?: "active" | "completed" | string;
+    interactive?: boolean;
+  };
+
+  const defaultHistory: HistoryItem[] = [
+    { id: "default-1", title: "Dalam Investigasi", subtitle: "25 September 2025", highlight: true },
+    { id: "default-2", title: "Kasus Ringan", subtitle: "19 September 2025" },
+    { id: "default-3", title: "Kasus Ringan", subtitle: "15 Agustus 2025" },
+    { id: "default-4", title: "Kasus Sedang", subtitle: "1 Agustus 2025" },
+    { id: "default-5", title: "Kasus Sedang", subtitle: "29 Juli 2025" },
+    { id: "default-6", title: "Kasus Parah", subtitle: "28 Juli 2025" },
+    { id: "default-7", title: "Kasus Ringan", subtitle: "8 Juni 2025" },
+    { id: "default-8", title: "Kasus Sedang", subtitle: "17 Maret 2025" },
+    { id: "default-9", title: "Kasus Ringan", subtitle: "5 Februari 2025" },
+    { id: "default-10", title: "Kasus Ringan", subtitle: "16 Januari 2025" },
+    { id: "default-11", title: "Kasus Ringan", subtitle: "10 Januari 2025" },
+    { id: "default-12", title: "Kasus Sedang", subtitle: "5 Januari 2025" }
+  ];
+
+  const historyItems: HistoryItem[] = chatSessions.length > 0
+    ? chatSessions.map((session) => ({
+        id: session.id,
+        title: session.title,
+        subtitle: formatSessionDate(session.timestamp),
+        description: session.preview,
+        status: session.status,
+        interactive: true
+      }))
+    : defaultHistory;
+
+  const renderHistoryList = () => (
+    <div className="flex-1 overflow-y-auto">
+      <div className="p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium text-gray-700">Riwayat Investigasi</h3>
+          {chatSessions.length > 0 && (
+            <button
+              onClick={handleRefresh}
+              className="text-xs font-medium text-pink-600 hover:text-pink-700 disabled:text-gray-400"
+              disabled={loadingMessages}
+            >
+              
+            </button>
+          )}
+        </div>
+        <div className="space-y-1">
+          {historyItems.map((item, index) => {
+            const isInteractive = Boolean((item as { interactive?: boolean }).interactive);
+            const isActive = chatSessions.length > 0 ? currentChatId === item.id : index === 0 || item.highlight;
+            const baseClasses = isInteractive
+              ? "p-3 rounded-lg transition-colors cursor-pointer"
+              : "p-3 rounded-lg";
+            const stateClasses = isActive
+              ? "bg-pink-50 border-l-4 border-pink-500"
+              : "hover:bg-gray-50";
+            const description = (item as { description?: string }).description;
+            const statusTag = (item as { status?: "active" | "completed" | string }).status;
+
+            return (
+              <div
+                key={item.id}
+                className={`${baseClasses} ${stateClasses}`}
+                onClick={isInteractive ? () => {
+                  handleSessionClick(item.id);
+                  setIsSidebarOpen(false);
+                } : undefined}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-medium text-gray-900">{item.title}</div>
+                  {statusTag && (
+                    <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${
+                      statusTag === "active"
+                        ? "bg-pink-100 text-pink-600"
+                        : "bg-gray-200 text-gray-600"
+                    }`}>
+                      {statusTag === "active" ? "Aktif" : "Selesai"}
+                    </span>
+                  )}
+                </div>
+                <div className="text-xs text-gray-500 mt-1">{item.subtitle}</div>
+                {description && (
+                  <div className="text-xs text-gray-400 mt-1 line-clamp-2">{description}</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderMessages = () => {
+    if (loadingMessages) {
+      return (
+        <div className="flex flex-1 items-center justify-center">
+          <div className="w-10 h-10 border-4 border-pink-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      );
+    }
+
+    if (chatError) {
+      return (
+        <div className="flex flex-1 flex-col items-center justify-center text-center text-gray-600 gap-2">
+          <p className="text-sm">{chatError}</p>
           <button
-            onClick={toggleSidebar}
-            className="md:hidden inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md shadow-sm text-white bg-[#E0446A] hover:bg-[#C53757] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E0446A]"
+            onClick={() => fetchMessages()}
+            className="px-4 py-1.5 text-sm font-medium text-white bg-pink-500 rounded-md hover:bg-pink-600"
           >
-            {isSidebarOpen ? "Tutup" : "Chat"}
+            Coba Lagi
           </button>
         </div>
-      </header>
+      );
+    }
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
-          <aside
-            className={`md:col-span-4 lg:col-span-3 space-y-4 ${isSidebarOpen ? "block" : "hidden md:block"}`}
-          >
-            <div className="bg-white rounded-3xl shadow-sm border border-[#FFE1E8] p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-[#1F2937]">Percakapan Terakhir</h2>
+    if (messages.length === 0) {
+      const greetingName = "Sahabat Breathy";
+      return (
+        <div className="flex flex-1 items-center justify-center">
+          <div className="text-center">
+            <h1 className="text-3xl font-bold bg-gradient-to-r from-pink-500 to-pink-600 bg-clip-text text-transparent mb-2">
+              Halo, {greetingName}
+            </h1>
+            <p className="text-gray-600 flex items-center justify-center gap-2">
+              Bagaimana
+              <Image src={logo} alt="Breathy Logo" width={80} height={20} className="inline-block" />
+              bisa membantumu hari ini?
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex-1 flex flex-col">
+        <div className="space-y-4">
+          {messages.map((message) => (
+            <div key={message.id} className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"}`}>
+              <div
+                className={`max-w-[70%] rounded-2xl px-4 py-3 text-sm shadow ${
+                  message.sender === "user"
+                    ? "bg-pink-500 text-white"
+                    : "bg-gray-100 text-gray-800"
+                }`}
+              >
+                {message.type === "image" ? (
+                  <div className="space-y-2">
+                    {message.media?.downloadUrl ? (
+                      <div className="overflow-hidden rounded-xl bg-black/5">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={message.media.downloadUrl}
+                          alt={message.text && message.text.trim().length > 0 ? message.text : "Lampiran Breathy"}
+                          className="w-full max-h-64 object-contain"
+                        />
+                      </div>
+                    ) : (
+                      <p className="text-xs italic text-gray-200">Lampiran tidak tersedia.</p>
+                    )}
+                    {message.text && message.text.trim().length > 0 && (
+                      <p className="leading-relaxed whitespace-pre-line">{message.text}</p>
+                    )}
+                    {message.pending && (
+                      <p className="text-xs italic text-gray-200">Sedang mengunggah...</p>
+                    )}
+                    {!message.pending && typeof message.media?.analysis?.severityImageScore === "number" && (
+                      <p className="text-xs text-gray-200">
+                        Skor gambar: {message.media.analysis.severityImageScore?.toFixed(2)}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="leading-relaxed whitespace-pre-line">{message.text}</p>
+                )}
+                <p className={`text-[11px] mt-2 ${message.sender === "user" ? "text-pink-100" : "text-gray-500"}`}>
+                  {formatMessageTime(message.timestamp)}
+                </p>
+              </div>
+            </div>
+          ))}
+          {isWaitingForBot && (
+            <div className="flex justify-start">
+              <div className="max-w-[70%] rounded-2xl px-4 py-3 text-sm shadow bg-gray-100 text-gray-800 flex items-center gap-3">
+                <TypingIndicator />
+                <span className="text-xs text-gray-500">Breathy sedang mengetik...</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <div className="flex h-[calc(110vh-80px)]">
+        <aside className="hidden md:flex w-80 bg-gray-100 border-r border-gray-200 flex-col">
+          <div className="p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="font-semibold text-gray-900 flex items-center">
+                <span className="inline-block w-4 h-4 bg-pink-500 rounded mr-2" />
+                Chat baru
+              </h2>
+              <button
+                className="inline-flex items-center justify-center text-sm font-medium text-pink-600 hover:text-pink-700 disabled:text-pink-300"
+                type="button"
+                onClick={handleResetChat}
+                disabled={isResetting || !caseId || !token}
+              >
+                {isResetting ? 'Mereset...' : 'Reset chat'}
+              </button>
+            </div>
+          </div>
+          {renderHistoryList()}
+        </aside>
+
+        {isSidebarOpen && (
+          <div className="fixed inset-0 z-40 flex md:hidden">
+            <div className="absolute inset-0 bg-black/40" onClick={toggleSidebar} aria-hidden="true" />
+            <aside className="relative z-50 w-72 bg-gray-100 border-r border-gray-200 flex flex-col h-full">
+              <div className="p-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="font-semibold text-gray-900">
+                    <span className="inline-block w-4 h-4 bg-pink-500 rounded mr-2" />
+                    Chat baru
+                  </h2>
+                  <button className="text-gray-400 hover:text-gray-600" type="button" onClick={toggleSidebar}>
+                    <svg width="20" height="20" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 8.586l4.95-4.95a1 1 0 111.414 1.414L11.414 10l4.95 4.95a1 1 0 11-1.414 1.414L10 11.414l-4.95 4.95a1 1 0 11-1.414-1.414L8.586 10l-4.95-4.95A1 1 0 115.05 3.636L10 8.586z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                </div>
                 <button
-                  onClick={handleRefresh}
-                  className="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-white bg-[#E0446A] hover:bg-[#C53757] disabled:opacity-60"
-                  disabled={loadingMessages}
+                  className="mt-4 inline-flex w-full items-center justify-center rounded-lg border border-pink-200 bg-white px-3 py-2 text-sm font-medium text-pink-600 hover:border-pink-300 hover:text-pink-700 disabled:border-gray-200 disabled:text-gray-300"
+                  type="button"
+                  onClick={() => {
+                    handleResetChat();
+                    toggleSidebar();
+                  }}
+                  disabled={isResetting || !caseId || !token}
                 >
-                  Segarkan
+                  {isResetting ? 'Mereset...' : 'Reset chat'}
                 </button>
               </div>
+              {renderHistoryList()}
+            </aside>
+          </div>
+        )}
 
-              <div className="space-y-4">
-                {chatSessions.length === 0 ? (
-                  <div className="p-4 rounded-xl bg-white border border-dashed border-[#F8B1C1] text-sm text-[#6B7280]">
-                    Belum ada percakapan aktif.
-                  </div>
-                ) : (
-                  chatSessions.map((session) => (
-                    <div
-                      key={session.id}
-                      className={`p-4 rounded-xl cursor-pointer transition-all duration-200 border hover:border-[#F8B1C1] ${
-                        currentChatId === session.id
-                          ? "bg-[#FFE7ED] border-[#E0446A]"
-                          : "bg-white border-transparent shadow-sm"
-                      }`}
-                      onClick={() => handleSessionClick(session.id)}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="text-base font-semibold text-[#1F2937]">{session.title}</h3>
-                        <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                            session.status === "active"
-                              ? "bg-[#FFE1E8] text-[#E0446A]"
-                              : "bg-[#E5E7EB] text-[#4B5563]"
-                          }`}
-                        >
-                          {session.status === "active" ? "Aktif" : "Selesai"}
-                        </span>
-                      </div>
-                      <p className="text-sm text-[#6B7280] mb-1">{session.preview}</p>
-                      <p className="text-xs text-[#9CA3AF]">{formatSessionDate(session.timestamp)}</p>
-                    </div>
-                  ))
-                )}
-              </div>
+        <main className="flex-1 flex flex-col bg-white">
+          <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between md:hidden">
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Breathy Chatbot</p>
+              <p className="text-xs text-gray-500">{statusLabel[status] ?? statusLabel[fallbackStatus]}</p>
             </div>
-          </aside>
+            <button
+              onClick={toggleSidebar}
+              className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-white bg-pink-500 rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-pink-500"
+            >
+              {isSidebarOpen ? "Tutup" : "Riwayat"}
+            </button>
+          </div>
 
-          <section className="md:col-span-8 lg:col-span-9">
-            <div className="bg-white rounded-3xl shadow-sm overflow-hidden border border-[#FFE1E8]">
-              <div className="px-6 py-4 border-b border-[#FFE1E8] flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="rounded-2xl bg-[#FFE1E8] p-3 text-[#E0446A]">
-                    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <path
-                        d="M12 11a3 3 0 100-6 3 3 0 000 6z"
-                        stroke="currentColor"
-                        strokeWidth="1.6"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                      <path
-                        d="M19 20v-1a7 7 0 10-14 0v1"
-                        stroke="currentColor"
-                        strokeWidth="1.6"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-semibold text-[#1F2937]">
-                      {statusLabel[status] ?? statusLabel[fallbackStatus]}
-                    </h3>
-                    <p className="text-sm text-[#6B7280]">Status kasus akan diperbarui setelah dokter meninjau</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="px-6 py-6 h-[480px] overflow-y-auto bg-white space-y-6">
-                {loadingMessages ? (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="w-10 h-10 border-4 border-[#E0446A] border-t-transparent rounded-full animate-spin" />
-                  </div>
-                ) : chatError ? (
-                  <div className="flex flex-col items-center justify-center h-full text-center text-[#6B7280] gap-2">
-                    <p className="text-sm">{chatError}</p>
-                    <button
-                      onClick={() => fetchMessages()}
-                      className="px-4 py-1.5 text-sm font-medium text-white bg-[#E0446A] rounded-md hover:bg-[#C53757]"
-                    >
-                      Coba Lagi
-                    </button>
-                  </div>
-                ) : messages.length === 0 ? (
-                  <div className="flex items-center justify-center h-full text-center text-[#6B7280]">
-                    <div>
-                      <p className="text-lg font-semibold text-[#1F2937] mb-2">
-                        Selamat datang di Breathy Care Assistant!
-                      </p>
-                      <p className="text-sm">
-                        Mulai percakapan dengan menyampaikan keluhan atau pertanyaan seputar kondisi pernapasanmu.
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  messages.map((message) => (
-                    <div
-                      key={message.id}
-                      className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"}`}
-                    >
-                      <div
-                        className={`max-w-[70%] rounded-2xl px-4 py-3 shadow-sm ${
-                          message.sender === "user"
-                            ? "bg-[#E0446A] text-white rounded-br-none"
-                            : "bg-[#F3F4F6] text-[#1F2937] rounded-bl-none"
-                        }`}
-                      >
-                        {message.type === "image" ? (
-                          <div className="space-y-2">
-                            {message.media?.downloadUrl ? (
-                              <div className="overflow-hidden rounded-xl bg-black/5">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                  src={message.media.downloadUrl}
-                                  alt={message.text && message.text.trim().length > 0 ? message.text : "Lampiran Breathy"}
-                                  className="w-full max-h-64 object-contain"
-                                />
-                              </div>
-                            ) : (
-                              <p className={`text-xs italic ${message.sender === "user" ? "text-[#FBD0D9]" : "text-[#6B7280]"}`}>
-                                Lampiran tidak tersedia.
-                              </p>
-                            )}
-                            {message.text && message.text.trim().length > 0 && (
-                              <p className="text-sm leading-relaxed whitespace-pre-line">{message.text}</p>
-                            )}
-                            {message.pending && (
-                              <p className={`text-xs italic ${message.sender === "user" ? "text-[#FBD0D9]" : "text-[#6B7280]"}`}>
-                                Sedang mengunggah...
-                              </p>
-                            )}
-                            {!message.pending &&
-                              typeof message.media?.analysis?.severityImageScore === "number" && (
-                                <p className={`text-xs ${message.sender === "user" ? "text-[#FBD0D9]" : "text-[#6B7280]"}`}>
-                                  Skor gambar: {message.media.analysis.severityImageScore?.toFixed(2)}
-                                </p>
-                              )}
-                          </div>
-                        ) : (
-                          <p className="text-sm leading-relaxed whitespace-pre-line">{message.text}</p>
-                        )}
-                        <p
-                          className={`text-xs mt-2 ${
-                            message.sender === "user" ? "text-[#FBD0D9]" : "text-[#9CA3AF]"
-                          }`}
-                        >
-                          {formatMessageTime(message.timestamp)}
-                        </p>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <div className="px-6 py-4 bg-white border-t border-[#FFE1E8]">
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={handleAttachmentClick}
-                    className="flex items-center justify-center w-10 h-10 bg-[#FFE7ED] text-[#E0446A] rounded-full hover:bg-[#FCD1DC] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E0446A] disabled:opacity-60 disabled:hover:bg-[#FFE7ED]"
-                    disabled={isUploadingMedia || !caseId || !token}
-                    aria-label="Lampirkan media"
-                    title="Lampirkan media"
-                  >
-                    <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
-                      <path
-                        d="M8.5 6h3a2.5 2.5 0 010 5H9a1 1 0 010-2h2.3a.5.5 0 000-1H8.5a2.5 2.5 0 010-5h3a5.5 5.5 0 110 11H9a1 1 0 110-2h2.5a3.5 3.5 0 000-7h-3a.5.5 0 000 1z"
-                      />
-                    </svg>
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={handleMediaSelected}
-                  />
-                  <input
-                    type="text"
-                    placeholder="Tulis pesanmu di sini..."
-                    value={inputText}
-                    onChange={(event) => setInputText(event.target.value)}
-                    onKeyDown={handleKeyDown}
-                    className="flex-1 px-4 py-3 bg-[#F9FAFB] border border-[#E5E7EB] rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#E0446A]"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleSendTextMessage}
-                    disabled={!inputText.trim() || isSendingText || isUploadingMedia}
-                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-[#E0446A] hover:bg-[#C53757] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E0446A] disabled:opacity-60"
-                  >
-                    <svg className="-ml-1 mr-2 h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                    {isSendingText ? "Mengirim..." : "Kirim Pesan"}
-                  </button>
-                </div>
-                {chatError && !loadingMessages && (
-                  <p className="mt-2 text-xs text-[#DC2626]">Sistem mengalami gangguan: {chatError}</p>
-                )}
-              </div>
+          <div className="flex-1 p-6 overflow-y-auto">
+            <div className="max-w-3xl mx-auto w-full h-full flex flex-col">
+              {renderMessages()}
             </div>
-          </section>
-        </div>
-      </main>
+          </div>
+
+          <div className="p-6 bg-white border-t border-gray-200">
+            <div className="max-w-4xl mx-auto">
+              <div className="flex items-center gap-4 bg-gray-50 rounded-2xl p-4">
+                <button
+                  type="button"
+                  onClick={handleAttachmentClick}
+                  className="flex items-center gap-2 text-gray-600 hover:text-gray-800 disabled:text-gray-400"
+                  disabled={isUploadingMedia || !caseId || !token}
+                  aria-label="Lampirkan media"
+                  title="Lampirkan media"
+                >
+                  <svg width="20" height="20" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" clipRule="evenodd" />
+                  </svg>
+                  <span className="text-sm font-medium">Lampirkan</span>
+                </button>
+                <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleMediaSelected} />
+                <input
+                  type="text"
+                  placeholder="Tulis pertanyaanmu di sini..."
+                  value={inputText}
+                  onChange={(event) => setInputText(event.target.value)}
+                  onKeyDown={handleKeyDown}
+                  className="flex-1 bg-transparent outline-none text-gray-700 placeholder-gray-400"
+                />
+                <button
+                  type="button"
+                  onClick={handleSendTextMessage}
+                  disabled={!inputText.trim() || isSendingText || isUploadingMedia}
+                  className="bg-pink-500 hover:bg-pink-600 disabled:bg-pink-300 text-white rounded-full p-2 flex items-center justify-center"
+                  aria-label="Kirim pesan"
+                >
+                  {isSendingText ? (
+                    <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                    </svg>
+                  ) : (
+                    <svg width="20" height="20" fill="currentColor" viewBox="0 0 20 20">
+                      <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+              {chatError && !loadingMessages && messages.length > 0 && (
+                <p className="mt-2 text-xs text-red-500">Sistem mengalami gangguan: {chatError}</p>
+              )}
+            </div>
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
