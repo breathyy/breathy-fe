@@ -20,7 +20,7 @@ export default function Navbar() {
 						<Link href="/dashboard" className={styles.navLink}>Dashboard</Link>
 					</li>
 					<li>
-						<Link href="/tentang" className={styles.navLink}>Tentang</Link>
+						<Link href="/tentang" className={styles.navLink}>Companion</Link>
 					</li>
 					<li>
 						<Link href="/chatbot" className={styles.navLink}>Chatbot</Link>
