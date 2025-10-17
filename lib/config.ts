@@ -19,26 +19,11 @@ const normalizeBaseUrl = (value: string): string => value.replace(/\/$/, "");
 export function getApiBaseUrl(): string {
   const base = readRuntimeEnv("NEXT_PUBLIC_API_BASE_URL");
 
-  if (!base || base.trim().length === 0) {
-    if (typeof window !== "undefined" && window.location?.origin) {
-      const { origin, hostname } = window.location;
-      if (hostname && hostname !== "localhost" && hostname !== "127.0.0.1") {
-        return normalizeBaseUrl(origin);
-      }
-    }
-
-    if (process.env.VERCEL_URL) {
-      return normalizeBaseUrl(`https://${process.env.VERCEL_URL}`);
-    }
-
-    if (process.env.NODE_ENV === "production") {
-      return normalizeBaseUrl(PROD_FALLBACK_BASE_URL);
-    }
-
-    return "http://localhost:8000";
+  if (base && base.trim().length > 0) {
+    return normalizeBaseUrl(base);
   }
 
-  return normalizeBaseUrl(base);
+  return normalizeBaseUrl(PROD_FALLBACK_BASE_URL);
 }
 
 export function getBlobPublicBaseUrl(): string | null {
