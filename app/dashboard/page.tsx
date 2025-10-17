@@ -516,6 +516,14 @@ export default function DashboardPage() {
   const [patientDemoUnlocked, setPatientDemoUnlocked] = useState(false);
   const [reviewState, setReviewState] = useState<ReviewState>({ loading: false, lastDecision: null, error: null });
   const selectedCaseIdRef = useRef<string | null>(null);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const hasDoctorSession = Boolean(doctorSession);
   const hasPatientSession = Boolean(patientSession);
@@ -546,61 +554,59 @@ export default function DashboardPage() {
     }
   }, [isPatientOnly]);
 
-  useEffect(() => {
+  const loadCases = useCallback(async () => {
     if (!hasAccess) {
+      setCaseSummaries([]);
+      setTablePatients([]);
+      setSelectedPatient(null);
+      selectedCaseIdRef.current = null;
       return;
     }
 
-    let cancelled = false;
-
-    const loadCases = async () => {
-      setTableLoading(true);
-      try {
-        const response = await apiFetch<ApiDoctorCasesResponse>('/doctor/cases', {
-          method: 'GET',
-          token: doctorSession?.token,
-          query: {
-            status: 'WAITING_DOCTOR,MILD,MODERATE,SEVERE',
-            pageSize: 50,
-            assigned: 'ALL'
-          }
-        });
-
-        if (cancelled) {
-          return;
+    setTableLoading(true);
+    try {
+      const response = await apiFetch<ApiDoctorCasesResponse>('/doctor/cases', {
+        method: 'GET',
+        token: doctorSession?.token,
+        query: {
+          status: 'WAITING_DOCTOR,MILD,MODERATE,SEVERE',
+          pageSize: 50,
+          assigned: 'ALL'
         }
+      });
 
-        const cases = Array.isArray(response.cases) ? response.cases : [];
-        setCaseSummaries(cases);
-        setTablePatients(cases.map(mapCaseToPatientRow));
+      if (!isMountedRef.current) {
+        return;
+      }
 
-        const currentSelected = selectedCaseIdRef.current;
-        if (currentSelected && !cases.some((item) => item.id === currentSelected)) {
-          selectedCaseIdRef.current = null;
-          setSelectedPatient(null);
-        }
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-        console.error('Gagal memuat daftar kasus dokter', error);
-        setCaseSummaries([]);
-        setTablePatients([]);
+      const cases = Array.isArray(response.cases) ? response.cases : [];
+      setCaseSummaries(cases);
+      setTablePatients(cases.map(mapCaseToPatientRow));
+
+      const currentSelected = selectedCaseIdRef.current;
+      if (currentSelected && !cases.some((item) => item.id === currentSelected)) {
         selectedCaseIdRef.current = null;
         setSelectedPatient(null);
-      } finally {
-        if (!cancelled) {
-          setTableLoading(false);
-        }
       }
-    };
-
-    loadCases();
-
-    return () => {
-      cancelled = true;
-    };
+    } catch (error) {
+      if (!isMountedRef.current) {
+        return;
+      }
+      console.error('Gagal memuat daftar kasus dokter', error);
+      setCaseSummaries([]);
+      setTablePatients([]);
+      selectedCaseIdRef.current = null;
+      setSelectedPatient(null);
+    } finally {
+      if (isMountedRef.current) {
+        setTableLoading(false);
+      }
+    }
   }, [doctorSession?.token, hasAccess]);
+
+  useEffect(() => {
+    loadCases();
+  }, [loadCases]);
 
   const handlePatientSelect = useCallback(async (patient: PatientRow) => {
     if (tableLoading) {
@@ -833,6 +839,8 @@ export default function DashboardPage() {
                 <PatientTable
                   patients={tablePatients}
                   onPatientSelect={handlePatientSelect}
+                  onRefresh={loadCases}
+                  refreshing={tableLoading}
                 />
               </div>
 

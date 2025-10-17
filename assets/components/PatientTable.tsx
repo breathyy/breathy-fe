@@ -14,11 +14,13 @@ interface Patient {
 interface PatientTableProps {
   patients: Patient[];
   onPatientSelect: (patient: Patient) => void;
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }
 
 const ITEMS_PER_PAGE = 5;
 
-export default function PatientTable({ patients, onPatientSelect }: PatientTableProps) {
+export default function PatientTable({ patients, onPatientSelect, onRefresh, refreshing }: PatientTableProps) {
   const [activeTab, setActiveTab] = useState('Seluruh Pasien');
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -54,7 +56,38 @@ export default function PatientTable({ patients, onPatientSelect }: PatientTable
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100">
       <div className="p-6 border-b border-gray-100">
-        <h3 className="text-lg font-semibold text-gray-800 mb-4">Daftar Pasien</h3>
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h3 className="text-lg font-semibold text-gray-800">Daftar Pasien</h3>
+          {onRefresh && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!refreshing) {
+                  onRefresh();
+                }
+              }}
+              disabled={refreshing}
+              className="inline-flex items-center gap-2 rounded-full bg-pink-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-pink-600 disabled:cursor-not-allowed disabled:bg-pink-300"
+            >
+              {refreshing ? (
+                <span className="flex items-center gap-2">
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                  </svg>
+                  Memuat...
+                </span>
+              ) : (
+                <span className="flex items-center gap-2">
+                  <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path d="M10 4a6 6 0 015.196 3H12a1 1 0 100 2h6a1 1 0 001-1V2a1 1 0 10-2 0v2.153A8 8 0 102 10a1 1 0 102 0 6 6 0 016-6z" />
+                  </svg>
+                  Segarkan
+                </span>
+              )}
+            </button>
+          )}
+        </div>
         
         {/* Tabs */}
         <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">

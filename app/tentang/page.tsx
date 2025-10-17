@@ -221,7 +221,13 @@ export default function TentangPage() {
   const patientCaseStatus = patientSession?.caseStatus ?? null;
   const hasAccess = hasPatientSession || hasDoctorSession;
   const caseStatus: CaseStatus | null = patientCaseStatus ?? null;
-  const plan = useMemo(() => (caseStatus ? companionPlans[caseStatus] : undefined), [caseStatus]);
+  const plan = useMemo(() => {
+    const defaultPlan = companionPlans.MILD ?? null;
+    if (caseStatus && companionPlans[caseStatus]) {
+      return companionPlans[caseStatus] ?? defaultPlan;
+    }
+    return defaultPlan;
+  }, [caseStatus]);
   const showCompanionPlan = hasPatientSession && Boolean(plan);
 
   useEffect(() => {
